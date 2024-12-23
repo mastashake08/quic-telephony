@@ -1,4 +1,4 @@
-from quic_telephony.session import SessionManager
+from quic_telephony.sessions import SessionManager
 from quic_telephony.media import MediaHandler
 
 
