@@ -32,7 +32,7 @@ class WebTransportHandler:
         self.user_id = user_id
         clients[user_id] = self
         logging.info(f"User registered: {user_id}")
-        logging.info(clients)
+        logging.info(self)
         # self.send_datagram(user_id=self.stream_id,  message=f"REGISTERED {user_id}".encode())
         # self._http.send_data(stream_id=self.stream_id,  data=f"REGISTERED {user_id}".encode(), end_stream=False)
         return f"REGISTERED {user_id}".encode()
@@ -196,6 +196,15 @@ class WebTransportServerProtocol(QuicConnectionProtocol):
         except Exception as e:
             logging.error(f"Error processing stream {stream_id}: {e}")
 
+async def stream_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+    """
+    Handle incoming stream data and map to the appropriate client.
+    """
+    try:
+       logging.info("READER")
+       logging.info(writer) 
+    except Exception as e:
+        logging.error(e)
 
 async def main():
     """
@@ -209,6 +218,7 @@ async def main():
         4433,
         configuration=configuration,
         create_protocol=WebTransportServerProtocol,
+        stream_handler=stream_handler
     )
     await asyncio.Future()  # Run indefinitely
 
