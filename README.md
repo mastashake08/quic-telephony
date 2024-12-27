@@ -1,6 +1,3 @@
-Here’s a `README.md` for your project, explaining its purpose, features, installation, usage, and development setup.
-
----
 
 # Quic Telephony
 
