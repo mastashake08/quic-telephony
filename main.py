@@ -113,18 +113,30 @@ class WebTransportServerProtocol(QuicConnectionProtocol):
         Handle HTTP/3 events, including WebTransport requests.
         """
         logging.info(event)
+
         if isinstance(event, HeadersReceived):
             self.handle_headers(event)
-        elif isinstance(event, DatagramReceived):
-            handler = self._handlers.get(event.stream_id)
-            logging.info(handler)
-            if handler:
-                self.handle_datagram(handler, event.data)
-        elif isinstance(event, WebTransportStreamDataReceived):
-            handler = self._handlers.get(event.session_id)
-            logging.info(handler)
-            if handler:
-                self.handle_stream(handler=handler, data=event.data, stream_id=event.stream_id)
+            return
+
+        if isinstance(event, DatagramReceived):
+            self._handle_datagram_event(event)
+            return
+
+        if isinstance(event, WebTransportStreamDataReceived):
+            self._handle_webtransport_stream_event(event)
+            return
+
+    def _handle_datagram_event(self, event):
+        handler = self._handlers.get(event.stream_id)
+        logging.info(handler)
+        if handler:
+            self.handle_datagram(handler, event.data)
+
+    def _handle_webtransport_stream_event(self, event):
+        handler = self._handlers.get(event.session_id)
+        logging.info(handler)
+        if handler:
+            self.handle_webtransport_stream(handler, event.data)
 
     def handle_headers(self, event: HeadersReceived):
         """
@@ -162,11 +174,18 @@ class WebTransportServerProtocol(QuicConnectionProtocol):
                 handler.handle_answer(payload)
             elif command == "BYE":
                 handler.handle_bye(payload)
+            elif command == "DIRECTORY":
+                clients_list = self.get_connected_clients()
+                handler.send_datagram(f"CONNECTED CLIENTS: {', '.join(clients_list)}")
             else:
                 handler.send_datagram("ERROR Unknown command")
         except Exception as e:
             logging.error(f"Error processing datagram: {e}")
             handler.send_datagram(message="ERROR Processing command", user_id=self.stream_id)
+
+    def get_connected_clients(self):
+        # Assuming self._handlers contains the connected clients
+        return list(self._handlers.keys())
 
     def handle_stream(self, handler: WebTransportHandler, data: bytes, stream_id: int):
         """
