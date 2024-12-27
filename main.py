@@ -19,8 +19,8 @@ clients: Dict[str, "WebTransportHandler"] = {}
 
 
 class WebTransportHandler:
-    def __init__(self, connection: H3Connection, stream_id: int):
-        self._http = connection
+    def __init__(self, http, stream_id):
+        self._http = http
         self.stream_id = stream_id
         self.user_id: Optional[str] = None
 
@@ -34,8 +34,8 @@ class WebTransportHandler:
         logging.info(f"User registered: {user_id}")
         logging.info(self)
         # self.send_datagram(user_id=self.stream_id,  message=f"REGISTERED {user_id}".encode())
-        # self._http.send_data(stream_id=self.stream_id,  data=f"REGISTERED {user_id}".encode(), end_stream=False)
-        return f"REGISTERED {user_id}".encode()
+        self._http.send_data(stream_id=self.stream_id,  data=f"REGISTERED {user_id}".encode(), end_stream=False)
+        return f"REGISTERED {user_id}"
 
     def send_datagram(self, message: str, user_id):
         """
@@ -87,6 +87,33 @@ class WebTransportHandler:
         else:
             self.send_datagram(f"ERROR User {target_user} not found")
 
+    def process_stream_data(self, data):
+        """
+        Process the data received on the WebTransport stream.
+        """
+        logging.info(f"Processing stream data: {data}")
+        try:
+            message = data.decode()
+            logging.info(f"Decoded message: {message}")
+            # Further processing of the message
+        except Exception as e:
+            logging.error(f"Error processing stream data: {e}")
+
+    def send_stream(self, message):
+        """
+        Send a message via WebTransport stream.
+        """
+        logging.info(f"Sending stream message: {message}")
+        try:
+            self._http.send_data(
+                stream_id=self.stream_id,
+                data=message.encode(),
+                end_stream=False
+            )
+            logging.info(f"Message sent on stream {self.stream_id}")
+        except Exception as e:
+            logging.error(f"Error sending stream message: {e}")
+
 
 class WebTransportServerProtocol(QuicConnectionProtocol):
     """
@@ -102,6 +129,7 @@ class WebTransportServerProtocol(QuicConnectionProtocol):
         """
         Handle QUIC events and route them to HTTP/3.
         """
+        logging.info(f"QUIC event received: {event}")
         if self._http is None:
             self._http = H3Connection(self._quic, enable_webtransport=True)
 
@@ -110,33 +138,91 @@ class WebTransportServerProtocol(QuicConnectionProtocol):
 
     def http_event_received(self, event):
         """
-        Handle HTTP/3 events, including WebTransport requests.
+        Handle HTTP/3 events.
         """
-        logging.info(event)
-
+        logging.info(f"HTTP/3 event received: {event}")
         if isinstance(event, HeadersReceived):
             self.handle_headers(event)
             return
 
         if isinstance(event, DatagramReceived):
+            logging.info(f"Datagram received: {event.data}")
             self._handle_datagram_event(event)
             return
 
         if isinstance(event, WebTransportStreamDataReceived):
+            logging.info(f"WebTransport stream data received: {event.data}")
             self._handle_webtransport_stream_event(event)
             return
 
     def _handle_datagram_event(self, event):
         handler = self._handlers.get(event.stream_id)
-        logging.info(handler)
+        logging.info(f"Handling datagram event for stream {event.stream_id}: {event.data}")
         if handler:
             self.handle_datagram(handler, event.data)
+        else:
+            logging.warning(f"No handler found for stream {event.stream_id}")
+
+    def handle_datagram(self, handler, data):
+        """
+        Handle the datagram data.
+        """
+        logging.info(f"Handling datagram data: {data}")
+        try:
+            message = data.decode()
+            logging.info(f"Decoded datagram message: {message}")
+            self.process_command(handler, message)
+        except Exception as e:
+            logging.error(f"Error processing datagram data: {e}")
 
     def _handle_webtransport_stream_event(self, event):
         handler = self._handlers.get(event.session_id)
-        logging.info(handler)
+        logging.info(f"Handling WebTransport stream event for session {event.session_id}: {event.data}")
         if handler:
             self.handle_webtransport_stream(handler, event.data)
+        else:
+            logging.warning(f"No handler found for session {event.session_id}")
+
+    def handle_webtransport_stream(self, handler, data):
+        """
+        Handle WebTransport stream data.
+        """
+        logging.info(f"Handling WebTransport stream data: {data}")
+        try:
+            message = data.decode()
+            logging.info(f"Decoded stream message: {message}")
+            self.process_command(handler, message)
+        except Exception as e:
+            logging.error(f"Error processing stream data: {e}")
+
+    def process_command(self, handler, message):
+        """
+        Process commands received via datagram or stream.
+        """
+        command, _, payload = message.partition(" ")
+        logging.info(f"Processing command: {command} with payload: {payload}")
+
+        if command == "REGISTER":
+            response = handler.register(payload)
+            #handler.send_stream(response)
+        elif command == "CALL":
+            handler.handle_call(payload)
+        elif command == "ANSWER":
+            handler.handle_answer(payload)
+        elif command == "BYE":
+            handler.handle_bye(payload)
+        elif command == "DIRECTORY":
+            clients_list = self.get_connected_clients()
+            response = f"CONNECTED CLIENTS: {', '.join(map(str, clients_list))}"
+            handler.send_stream(response)
+        else:
+            handler.send_stream("ERROR Unknown command")
+
+    def get_connected_clients(self):
+        """
+        Get a list of connected clients.
+        """
+        return list(self._handlers.keys())
 
     def handle_headers(self, event: HeadersReceived):
         """
@@ -149,43 +235,15 @@ class WebTransportServerProtocol(QuicConnectionProtocol):
                 headers=[(b":status", b"200"), (b"sec-webtransport-http3-draft", b"draft02")],
             )
             logging.info(f"WebTransport session established on stream {event.stream_id}")
-            self._handlers[event.stream_id] = WebTransportHandler(self._http, event.stream_id)
+            # Create a bidirectional stream for the handler
+            bidirectional_stream_id = self._quic.get_next_available_stream_id(is_unidirectional=False)
+            self._handlers[event.stream_id] = WebTransportHandler(self._http, bidirectional_stream_id)
         else:
             self._http.send_headers(
                 stream_id=event.stream_id, headers=[(b":status", b"405")]
             )
             self._http.reset_stream(event.stream_id)
-
-    def handle_datagram(self, handler: WebTransportHandler, data: bytes):
-        """
-        Process datagrams for signaling commands.
-        """
-        try:
-            message = data.decode()
-            command, *args = message.split(" ", 1)
-            payload = args[0] if args else ""
-
-            if command == "REGISTER":
-                message = handler.register(payload)
-                handler.send_datagram(message)
-            elif command == "CALL":
-                handler.handle_call(payload)
-            elif command == "ANSWER":
-                handler.handle_answer(payload)
-            elif command == "BYE":
-                handler.handle_bye(payload)
-            elif command == "DIRECTORY":
-                clients_list = self.get_connected_clients()
-                handler.send_datagram(f"CONNECTED CLIENTS: {', '.join(clients_list)}")
-            else:
-                handler.send_datagram("ERROR Unknown command")
-        except Exception as e:
-            logging.error(f"Error processing datagram: {e}")
-            handler.send_datagram(message="ERROR Processing command", user_id=self.stream_id)
-
-    def get_connected_clients(self):
-        # Assuming self._handlers contains the connected clients
-        return list(self._handlers.keys())
+            logging.warning(f"Invalid WebTransport request on stream {event.stream_id}")
 
     def handle_stream(self, handler: WebTransportHandler, data: bytes, stream_id: int):
         """
@@ -233,7 +291,7 @@ async def main():
     configuration.load_cert_chain(certfile="cert.pem", keyfile="key.pem")
 
     await serve(
-        "localhost",
+        "::",
         4433,
         configuration=configuration,
         create_protocol=WebTransportServerProtocol,
