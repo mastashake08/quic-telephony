@@ -214,7 +214,7 @@ async def main():
     configuration.load_cert_chain(certfile="cert.pem", keyfile="key.pem")
 
     await serve(
-        "localhost",
+        "::",
         4433,
         configuration=configuration,
         create_protocol=WebTransportServerProtocol,
